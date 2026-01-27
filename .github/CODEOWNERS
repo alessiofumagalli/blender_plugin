@@ -1,0 +1,17 @@
+# Code Owners
+
+# This file defines who owns specific parts of the codebase
+# When a pull request is created that modifies owned files,
+# the designated owners will automatically be requested for review
+
+# Repository owner is the default owner for everything
+* @alessiofumagalli
+
+# Plugin files
+/plugins/ @alessiofumagalli
+
+# Documentation
+*.md @alessiofumagalli
+
+# GitHub configuration
+/.github/ @alessiofumagalli

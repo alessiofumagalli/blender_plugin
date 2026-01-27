@@ -46,6 +46,14 @@ These plugins are tested for **Blender v 5.0.1**.
 
 For more information about Blender, visit [https://www.blender.org](https://www.blender.org)
 
+## Contributing
+
+We welcome contributions to this project! To maintain code quality:
+
+- All changes to the main branch must go through pull requests
+- See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for information about branch protection
+- Use the pull request template when submitting changes
+
 ## License
 
 See the [LICENSE](LICENSE) file for details.

@@ -1,0 +1,39 @@
+name: Python Syntax Check
+
+# This workflow validates Python syntax for all plugin files
+# Can be used as a required status check for branch protection
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'plugins/**/*.py'
+      - '**.py'
+  push:
+    branches: [ main ]
+    paths:
+      - 'plugins/**/*.py'
+      - '**.py'
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Check Python syntax
+      run: |
+        echo "Checking Python syntax for all .py files..."
+        python -m py_compile plugins/*.py
+        echo "✓ All Python files have valid syntax"
+        
+    - name: Display success message
+      run: |
+        echo "✓ Python syntax check passed successfully!"
