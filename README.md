@@ -51,4 +51,3 @@ For more information about Blender, visit [https://www.blender.org](https://www.
 See the [LICENSE](LICENSE) file for details.
 
 ## Author
-Alessio Fumagalli
