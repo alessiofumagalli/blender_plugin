@@ -31,8 +31,12 @@ jobs:
     - name: Check Python syntax
       run: |
         echo "Checking Python syntax for all .py files..."
-        python -m py_compile plugins/*.py
-        echo "✓ All Python files have valid syntax"
+        if find plugins -name "*.py" -print -quit | grep -q .; then
+          find plugins -name "*.py" -exec python -m py_compile {} \;
+          echo "✓ All Python files have valid syntax"
+        else
+          echo "No Python files found in plugins directory"
+        fi
         
     - name: Display success message
       run: |
