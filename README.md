@@ -195,6 +195,10 @@ These plugins are tested for **Blender v 5.0 and later**.
 
 For more information about Blender, visit [https://www.blender.org](https://www.blender.org)
 
+## Contributing
+
+All contributions to this repository must be made through pull requests to the `main` branch. See [.github/BRANCH_PROTECTION_SETUP.md](.github/BRANCH_PROTECTION_SETUP.md) for details on configuring branch protection rules to enforce this workflow.
+
 ## License
 
 See the [LICENSE](LICENSE) file for details.
