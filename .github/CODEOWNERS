@@ -1,0 +1,8 @@
+# This file defines code owners for the repository
+# Code owners are automatically requested for review when someone opens a pull request
+# that modifies code that they own.
+# 
+# The repository owner @alessiofumagalli has approval authority for all files
+
+# Default owner for everything in the repo
+* @alessiofumagalli
