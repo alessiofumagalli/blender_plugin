@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Parametric Surface",
     "author": "Alessio Fumagalli",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (5, 0, 0),
     "location": "Geometry Nodes > Add",
     "description": "Parametric surface primitive (x(u,v), y(u,v), z(u,v)) built from native Geometry Nodes",
@@ -10,6 +10,7 @@ bl_info = {
 
 import bpy
 from math import pi, e, tau
+import re
 
 GROUP_NAME = "Parametric Surface"
 
@@ -27,8 +28,6 @@ def make_value(nodes, val, loc=(0, 0)):
 # --------------------------------------
 # Shunting-yard tokenizer & parser (RPN)
 # --------------------------------------
-import re
-
 _TOKEN_SPEC = [
     ("NUMBER", r"\d+(\.\d+)?"),  # 12, 12.34
     ("ID", r"[A-Za-z_]\w*"),  # identifiers
@@ -61,21 +60,10 @@ _PRECEDENCE = {
     "-": (2, "left"),
 }
 
-# function arity map (None = variadic handled elsewhere, here we use 1 or 2)
+# function arity map
 _FUNC_1 = {
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "sqrt",
-    "abs",
-    "exp",
-    "ln",
-    "floor",
-    "ceil",
-    "frac",
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "sqrt", "abs", "exp", "ln", "floor", "ceil", "frac",
 }
 _FUNC_2 = {"pow", "log", "min", "max", "mod"}
 
@@ -96,28 +84,20 @@ def to_rpn(expr):
         if typ == "NUMBER":
             out.append(("NUMBER", txt))
         elif typ == "ID":
-            # treat all IDs as functions if followed by '(' (handled when '(' appears)
-            out.append(("ID", txt)) if prev_token and prev_token[
-                1
-            ] == ")" else out.append(("ID", txt))  # placeholder
-            # We handle real function detection when '(' is processed
+            out.append(("ID", txt)) if prev_token and prev_token[1] == ")" else out.append(("ID", txt))
             out[-1] = ("ID", txt)
         elif typ == "OP":
             if txt == "(":
-                # If previous token was an ID => function call
                 if prev_token and prev_token[0] == "ID":
                     stack.append(("FUNC", prev_token[1]))
-                    # remove the identifier just put to output
                     out.pop()
-                    arg_count.append(1)  # at least one argument by default
+                    arg_count.append(1)
                 stack.append(("OP", "("))
             elif txt == ",":
-                # function argument separator
                 while stack and not (stack[-1][0] == "OP" and stack[-1][1] == "("):
                     out.append(stack.pop())
                 if not stack:
                     raise ValueError("Misplaced comma or mismatched parentheses")
-                # bump arg counter
                 if not arg_count:
                     raise ValueError("Comma outside of function call")
                 arg_count[-1] += 1
@@ -126,39 +106,31 @@ def to_rpn(expr):
                     out.append(stack.pop())
                 if not stack:
                     raise ValueError("Mismatched parentheses")
-                stack.pop()  # pop '('
-                # if function at the top of the stack, output it with arity
+                stack.pop()
                 if stack and stack[-1][0] == "FUNC":
                     func = stack.pop()[1]
                     nargs = arg_count.pop() if arg_count else 1
                     out.append(("FUNC", func, nargs))
             else:
-                # Check for unary minus/plus
                 is_unary = prev_token is None or (
                     prev_token[0] == "OP"
                     and prev_token[1] in ("(", "+", "-", "*", "/", "^", ",")
                 )
 
                 if is_unary and txt in ("-", "+"):
-                    # Treat unary minus/plus as a unary operator
                     if txt == "-":
                         stack.append(("UNARY", "neg"))
-                    # Unary plus does nothing, so we skip it
                 else:
-                    # binary operators
                     while stack:
                         top = stack[-1]
                         if top[0] == "OP" and top[1] in _PRECEDENCE:
                             p1, assoc1 = _PRECEDENCE[txt]
                             p2, _ = _PRECEDENCE[top[1]]
-                            if (assoc1 == "left" and p1 <= p2) or (
-                                assoc1 == "right" and p1 < p2
-                            ):
+                            if (assoc1 == "left" and p1 <= p2) or (assoc1 == "right" and p1 < p2):
                                 out.append(stack.pop())
                             else:
                                 break
                         elif top[0] == "UNARY":
-                            # Unary operators have highest precedence
                             out.append(stack.pop())
                         else:
                             break
@@ -177,7 +149,6 @@ def to_rpn(expr):
 # Build Math node graph from RPN into GN editor
 # ---------------------------------------------
 def make_math(nodes, op, a=None, b=None, loc=(0, 0)):
-    # op is Blender Math operation enum name
     n = nodes.new("ShaderNodeMath")
     n.operation = op
     n.location = loc
@@ -189,10 +160,6 @@ def make_math(nodes, op, a=None, b=None, loc=(0, 0)):
 
 
 def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_string):
-    """
-    Returns (socket, rightmost_x) where socket is the output socket (Float field) of the expression.
-    base_x/base_y define the layout origin for this expression column.
-    """
     rpn = to_rpn(expr_string)
     stack = []
     x = base_x
@@ -229,9 +196,7 @@ def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_str
                 push_socket(sock)
                 x += dx
             else:
-                raise ValueError(
-                    f"Unknown identifier '{tok[1]}' (use u, v, pi, e, tau, or functions)"
-                )
+                raise ValueError(f"Unknown identifier '{tok[1]}' (use u, v, pi, e, tau, or functions)")
         elif tok[0] == "OP":
             op = tok[1]
             if op in {"+", "-", "*", "/", "^"}:
@@ -251,7 +216,6 @@ def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_str
             else:
                 raise ValueError(f"Unsupported operator '{op}'")
         elif tok[0] == "UNARY":
-            # Handle unary operators
             op = tok[1]
             if op == "neg":
                 a = stack.pop()[0]
@@ -264,32 +228,15 @@ def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_str
         elif tok[0] == "FUNC":
             fname = tok[1].lower()
             nargs = tok[2]
-            if fname == "neg" and nargs == 1:
-                # Unary negation
-                a = stack.pop()[0]
-                node, sock = make_math(nodes, "MULTIPLY", a, None, loc=(x, y))
-                node.inputs[1].default_value = -1.0
-                push_socket(sock)
-                x += dx
-            elif fname in _FUNC_1 and nargs == 1:
+            if fname in _FUNC_1 and nargs == 1:
                 a = stack.pop()[0]
                 opmap = {
-                    "sin": "SINE",
-                    "cos": "COSINE",
-                    "tan": "TANGENT",
-                    "asin": "ARCSINE",
-                    "acos": "ARCCOSINE",
-                    "atan": "ARCTANGENT",
-                    "sqrt": "SQRT",
-                    "abs": "ABSOLUTE",
-                    "exp": "EXPONENT",
-                    "ln": "LOGARITHM",
-                    "floor": "FLOOR",
-                    "ceil": "CEIL",
-                    "frac": "FRACTION",
+                    "sin": "SINE", "cos": "COSINE", "tan": "TANGENT",
+                    "asin": "ARCSINE", "acos": "ARCCOSINE", "atan": "ARCTANGENT",
+                    "sqrt": "SQRT", "abs": "ABSOLUTE", "exp": "EXPONENT",
+                    "ln": "LOGARITHM", "floor": "FLOOR", "ceil": "CEIL", "frac": "FRACTION",
                 }
                 if fname == "ln":
-                    # LOGARITHM with base e
                     node, sock = make_math(nodes, "LOGARITHM", a, None, loc=(x, y))
                     node.inputs[1].default_value = e
                 else:
@@ -314,9 +261,7 @@ def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_str
                 push_socket(sock)
                 x += dx
             else:
-                raise ValueError(
-                    f"Function '{fname}' expects {1 if fname in _FUNC_1 else 2} argument(s)"
-                )
+                raise ValueError(f"Function '{fname}' expects {1 if fname in _FUNC_1 else 2} argument(s)")
         else:
             raise ValueError(f"Token not handled: {tok}")
     if len(stack) != 1:
@@ -327,17 +272,8 @@ def build_expr(nodes, base_x, base_y, source_socket_u, source_socket_v, expr_str
 # -------------------------------
 # Interface socket helper
 # -------------------------------
-def ensure_socket(
-    iface, name, in_out, socket_type, default=None, min_value=None, max_value=None
-):
-    sock = next(
-        (
-            s
-            for s in iface.items_tree
-            if s.name == name and getattr(s, "in_out", None) == in_out
-        ),
-        None,
-    )
+def ensure_socket(iface, name, in_out, socket_type, default=None, min_value=None, max_value=None):
+    sock = next((s for s in iface.items_tree if s.name == name and getattr(s, "in_out", None) == in_out), None)
     if not sock:
         sock = iface.new_socket(name, socket_type=socket_type, in_out=in_out)
     if default is not None and hasattr(sock, "default_value"):
@@ -353,29 +289,23 @@ def ensure_socket(
 # Socket lookup helper
 # -------------------------------
 def first_geo_socket(sockets, preferred_names=()):
-    # try preferred names first
     for name in preferred_names:
         if name in sockets:
             return sockets[name]
-    # else first geometry-typed socket
     for s in sockets:
         if getattr(s, "bl_socket_idname", "").lower().endswith("geometry"):
             return s
-    # fallback: first socket if nothing else
     return sockets[0] if sockets else None
 
 
 # ---------------------------------------
 # Build the whole node group from scratch
 # ---------------------------------------
-def build_group_from_expressions(x_expr, y_expr, z_expr):
-    # make (or reuse) the GN group
-    if GROUP_NAME in bpy.data.node_groups:
-        ng = bpy.data.node_groups[GROUP_NAME]
-        # wipe and rebuild nodes, but keep interface sockets
-        ng.nodes.clear()
-    else:
+def build_group_from_expressions(x_expr, y_expr, z_expr, ng=None):
+    if ng is None:
         ng = bpy.data.node_groups.new(GROUP_NAME, "GeometryNodeTree")
+    else:
+        ng.nodes.clear()
 
     iface = ng.interface
     ensure_socket(iface, "Geometry", "OUTPUT", "NodeSocketGeometry")
@@ -383,12 +313,8 @@ def build_group_from_expressions(x_expr, y_expr, z_expr):
     ensure_socket(iface, "u Max", "INPUT", "NodeSocketFloat", default=2 * pi)
     ensure_socket(iface, "v Min", "INPUT", "NodeSocketFloat", default=0.0)
     ensure_socket(iface, "v Max", "INPUT", "NodeSocketFloat", default=pi)
-    ensure_socket(
-        iface, "u Resolution", "INPUT", "NodeSocketInt", default=50, min_value=1
-    )
-    ensure_socket(
-        iface, "v Resolution", "INPUT", "NodeSocketInt", default=50, min_value=1
-    )
+    ensure_socket(iface, "u Resolution", "INPUT", "NodeSocketInt", default=50, min_value=1)
+    ensure_socket(iface, "v Resolution", "INPUT", "NodeSocketInt", default=50, min_value=1)
 
     nodes = ng.nodes
     links = ng.links
@@ -448,30 +374,9 @@ def build_group_from_expressions(x_expr, y_expr, z_expr):
 
     # (3) Build x(u,v), y(u,v), z(u,v) graphs
     try:
-        x_sock, xr = build_expr(
-            nodes,
-            base_x=-200,
-            base_y=400,
-            source_socket_u=n_u.outputs[0],
-            source_socket_v=n_v.outputs[0],
-            expr_string=x_expr,
-        )
-        y_sock, yr = build_expr(
-            nodes,
-            base_x=-200,
-            base_y=100,
-            source_socket_u=n_u.outputs[0],
-            source_socket_v=n_v.outputs[0],
-            expr_string=y_expr,
-        )
-        z_sock, zr = build_expr(
-            nodes,
-            base_x=-200,
-            base_y=-200,
-            source_socket_u=n_u.outputs[0],
-            source_socket_v=n_v.outputs[0],
-            expr_string=z_expr,
-        )
+        x_sock, xr = build_expr(nodes, base_x=-200, base_y=400, source_socket_u=n_u.outputs[0], source_socket_v=n_v.outputs[0], expr_string=x_expr)
+        y_sock, yr = build_expr(nodes, base_x=-200, base_y=100, source_socket_u=n_u.outputs[0], source_socket_v=n_v.outputs[0], expr_string=y_expr)
+        z_sock, zr = build_expr(nodes, base_x=-200, base_y=-200, source_socket_u=n_u.outputs[0], source_socket_v=n_v.outputs[0], expr_string=z_expr)
     except Exception as ex:
         raise
 
@@ -501,7 +406,6 @@ class NODE_OT_add_parametric_surface_gn(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        # Build a default sphere initially so it renders immediately
         ng = build_group_from_expressions("sin(v)*cos(u)", "sin(v)*sin(u)", "cos(v)")
         tree = context.space_data.edit_tree
         node = tree.nodes.new("GeometryNodeGroup")
@@ -512,12 +416,9 @@ class NODE_OT_add_parametric_surface_gn(bpy.types.Operator):
         node["y_expr"] = "sin(v)*sin(u)"
         node["z_expr"] = "cos(v)"
 
-        # Auto-wire to root Group Output
         out = next((n for n in tree.nodes if n.bl_idname == "NodeGroupOutput"), None)
         if out and "Geometry" in out.inputs and "Geometry" in node.outputs:
-            context.space_data.edit_tree.links.new(
-                node.outputs["Geometry"], out.inputs["Geometry"]
-            )
+            context.space_data.edit_tree.links.new(node.outputs["Geometry"], out.inputs["Geometry"])
         return {"FINISHED"}
 
 
@@ -536,7 +437,7 @@ class NODE_OT_build_parametric_surface(bpy.types.Operator):
             not node
             or node.bl_idname != "GeometryNodeGroup"
             or not node.node_tree
-            or node.node_tree.name != GROUP_NAME
+            or not node.node_tree.name.startswith(GROUP_NAME)
         ):
             self.report({"ERROR"}, "Select the 'Parametric Surface' node to build")
             return {"CANCELLED"}
@@ -546,7 +447,11 @@ class NODE_OT_build_parametric_surface(bpy.types.Operator):
         z_expr = node.get("z_expr", "cos(v)")
 
         try:
-            ng = build_group_from_expressions(x_expr, y_expr, z_expr)
+            # FIX: If the node tree is shared (e.g., duplicated), fork it to make a unique copy
+            if node.node_tree.users > 1:
+                node.node_tree = node.node_tree.copy()
+                
+            ng = build_group_from_expressions(x_expr, y_expr, z_expr, ng=node.node_tree)
         except Exception as ex:
             self.report({"ERROR"}, f"Parse/build error: {ex}")
             return {"CANCELLED"}
@@ -568,13 +473,12 @@ class NODE_PT_parametric_surface(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         tree = getattr(context.space_data, "edit_tree", None)
-        node = getattr(tree, "nodes", None)
         node = tree.nodes.active if tree else None
         return bool(
             node
             and node.bl_idname == "GeometryNodeGroup"
             and node.node_tree
-            and node.node_tree.name == GROUP_NAME
+            and node.node_tree.name.startswith(GROUP_NAME)
         )
 
     def draw(self, context):
