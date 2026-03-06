@@ -13,8 +13,24 @@ import bmesh
 from mathutils import Vector, Matrix
 from math import pi, e, tau
 import re
+import random  # <<< ADDED (only for hidden random)
 
 GROUP_NAME = "Calculate Surface"
+
+# --- Hidden random (ADDED) ---
+DEFAULT_DIGITS = 100
+HIDDEN_PROP = "hidden_random"
+DIGITS_PROP = "hidden_random_digits"
+MIN_PROP = "hidden_random_min"
+MAX_PROP = "hidden_random_max"
+
+
+def rand_with_digits(digits: int) -> int:
+    if not isinstance(digits, int) or digits < 1:
+        raise ValueError("digits must be an integer >= 1")
+    lo = 10 ** (digits - 1)
+    hi = 10 ** digits - 1
+    return random.randint(lo, hi)
 
 
 # ==================== Expression Parser ====================
@@ -238,6 +254,15 @@ def build_group():
     else:
         ng = bpy.data.node_groups.new(GROUP_NAME, "GeometryNodeTree")
 
+    # --- Hidden random stored on node group (ADDED) ---
+    # Stored as string to avoid precision/size issues for huge integers.
+    digits = DEFAULT_DIGITS
+    n = rand_with_digits(digits)
+    ng[HIDDEN_PROP] = str(n)
+    ng[DIGITS_PROP] = int(digits)
+    ng[MIN_PROP] = str(10 ** (digits - 1))
+    ng[MAX_PROP] = str(10 ** digits - 1)
+
     iface = ng.interface
     ensure_socket(iface, "Geometry", "OUTPUT", "NodeSocketGeometry")
     ensure_socket(iface, "Curve Geometry", "INPUT", "NodeSocketGeometry")
@@ -309,7 +334,7 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
                         source_node.bl_idname == "GeometryNodeGroup"
                         and source_node.node_tree
                     ):
-                        if source_node.node_tree.name == "Parametric Curve":
+                        if source_node.node_tree.name.startswith("Parametric Curve"):
                             curve_node = source_node
                             break
 
@@ -327,10 +352,7 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
                         source_node.bl_idname == "GeometryNodeGroup"
                         and source_node.node_tree
                     ):
-                        if (
-                            source_node.node_tree.name
-                            == "Parametric Transformation Matrix"
-                        ):
+                        if source_node.node_tree.name.startswith("Parametric Transformation Matrix"):
                             matrix_node = source_node
                             break
 
