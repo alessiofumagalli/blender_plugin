@@ -11,8 +11,24 @@ bl_info = {
 import bpy
 from math import pi, e, tau
 import re
+import random  # <<< ADDED (only for hidden random)
 
 GROUP_NAME = "Parametric Surface"
+
+# --- Hidden random (ADDED) ---
+DEFAULT_DIGITS = 100
+HIDDEN_PROP = "hidden_random"
+DIGITS_PROP = "hidden_random_digits"
+MIN_PROP = "hidden_random_min"
+MAX_PROP = "hidden_random_max"
+
+
+def rand_with_digits(digits: int) -> int:
+    if not isinstance(digits, int) or digits < 1:
+        raise ValueError("digits must be an integer >= 1")
+    lo = 10 ** (digits - 1)
+    hi = 10 ** digits - 1
+    return random.randint(lo, hi)
 
 
 # -----------------------------
@@ -307,6 +323,15 @@ def build_group_from_expressions(x_expr, y_expr, z_expr, ng=None):
     else:
         ng.nodes.clear()
 
+    # --- Hidden random stored on node group (ADDED) ---
+    # Stored as string to avoid precision/size issues for huge integers.
+    digits = DEFAULT_DIGITS
+    n = rand_with_digits(digits)
+    ng[HIDDEN_PROP] = str(n)
+    ng[DIGITS_PROP] = int(digits)
+    ng[MIN_PROP] = str(10 ** (digits - 1))
+    ng[MAX_PROP] = str(10 ** digits - 1)
+
     iface = ng.interface
     ensure_socket(iface, "Geometry", "OUTPUT", "NodeSocketGeometry")
     ensure_socket(iface, "u Min", "INPUT", "NodeSocketFloat", default=0.0)
@@ -450,7 +475,7 @@ class NODE_OT_build_parametric_surface(bpy.types.Operator):
             # FIX: If the node tree is shared (e.g., duplicated), fork it to make a unique copy
             if node.node_tree.users > 1:
                 node.node_tree = node.node_tree.copy()
-                
+
             ng = build_group_from_expressions(x_expr, y_expr, z_expr, ng=node.node_tree)
         except Exception as ex:
             self.report({"ERROR"}, f"Parse/build error: {ex}")
