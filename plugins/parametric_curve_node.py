@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Parametric Curve",
     "author": "Alessio Fumagalli",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (5, 0, 0),
     "location": "Geometry Nodes > Add",
     "description": "Parametric curve primitive (x(t), y(t), z(t)) built from native Geometry Nodes",
@@ -11,8 +11,25 @@ bl_info = {
 import bpy
 from math import pi, e, tau
 import re
+import random  # <<< ADDED (only for hidden random)
 
 GROUP_NAME = "Parametric Curve"
+
+# --- Hidden random (ADDED) ---
+DEFAULT_DIGITS = 100
+HIDDEN_PROP = "hidden_random"
+DIGITS_PROP = "hidden_random_digits"
+MIN_PROP = "hidden_random_min"
+MAX_PROP = "hidden_random_max"
+
+
+def rand_with_digits(digits: int) -> int:
+    if not isinstance(digits, int) or digits < 1:
+        raise ValueError("digits must be an integer >= 1")
+    lo = 10 ** (digits - 1)
+    hi = 10 ** digits - 1
+    return random.randint(lo, hi)
+
 
 # -----------------------------
 # Utility: create a Value node
@@ -294,6 +311,15 @@ def build_group_from_expressions(x_expr, y_expr, z_expr, ng=None):
     else:
         ng.nodes.clear()
 
+    # --- Hidden random stored on node group (ADDED) ---
+    # Stored as string to avoid precision/size issues for huge integers.
+    digits = DEFAULT_DIGITS
+    n = rand_with_digits(digits)
+    ng[HIDDEN_PROP] = str(n)
+    ng[DIGITS_PROP] = int(digits)
+    ng[MIN_PROP] = str(10 ** (digits - 1))
+    ng[MAX_PROP] = str(10 ** digits - 1)
+
     iface = ng.interface
     ensure_socket(iface, "Geometry", "OUTPUT", "NodeSocketGeometry")
     ensure_socket(iface, "t Min", "INPUT", "NodeSocketFloat", default=0.0)
@@ -432,7 +458,7 @@ class NODE_OT_build_parametric_curve(bpy.types.Operator):
             # FIX: If the node tree is shared, make a unique copy of it before rebuilding
             if node.node_tree.users > 1:
                 node.node_tree = node.node_tree.copy()
-                
+
             ng = build_group_from_expressions(x_expr, y_expr, z_expr, ng=node.node_tree)
         except Exception as ex:
             self.report({"ERROR"}, f"Parse/build error: {ex}")
