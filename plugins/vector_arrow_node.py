@@ -9,8 +9,24 @@ bl_info = {
 }
 
 import bpy
+import random  # <<< ADDED (only for hidden random)
 
 GROUP_NAME = "Vector Arrow"
+
+# --- Hidden random (ADDED) ---
+DEFAULT_DIGITS = 100
+HIDDEN_PROP = "hidden_random"
+DIGITS_PROP = "hidden_random_digits"
+MIN_PROP = "hidden_random_min"
+MAX_PROP = "hidden_random_max"
+
+
+def rand_with_digits(digits: int) -> int:
+    if not isinstance(digits, int) or digits < 1:
+        raise ValueError("digits must be an integer >= 1")
+    lo = 10 ** (digits - 1)
+    hi = 10 ** digits - 1
+    return random.randint(lo, hi)
 
 
 def ensure_socket(iface, name, in_out, socket_type, default=None, *, min_value=None):
@@ -53,6 +69,15 @@ def build_vector_arrow_group():
 
     # ricrea sempre da zero
     ng = bpy.data.node_groups.new(GROUP_NAME, "GeometryNodeTree")
+
+    # --- Hidden random stored on node group (ADDED) ---
+    # Stored as string to avoid precision/size issues for huge integers.
+    digits = DEFAULT_DIGITS
+    n = rand_with_digits(digits)
+    ng[HIDDEN_PROP] = str(n)
+    ng[DIGITS_PROP] = int(digits)
+    ng[MIN_PROP] = str(10 ** (digits - 1))
+    ng[MAX_PROP] = str(10 ** digits - 1)
 
     iface = ng.interface
 
