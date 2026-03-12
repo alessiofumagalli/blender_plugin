@@ -1,17 +1,17 @@
 bl_info = {
-    "name": "Bezier C1 Connection Handles",
+    "name": "Bezier Connection Handles",
     "author": "Alessio Fumagalli",
-    "version": (1, 4, 0),
+    "version": (1, 5, 0),
     "blender": (5, 0, 0),
     "location": "Geometry Nodes > Add",
-    "description": "Compute B Second as a point geometry from A End/A Prev for C1 continuation with degree toggles",
+    "description": "Compute B Second as a point geometry from A End/A Prev for G1 continuation with degree toggles",
     "category": "Node",
 }
 
 import bpy
 import random  # <<< ADDED (only for hidden random)
 
-GROUP_NAME = "Bezier C1 Connection Handles"
+GROUP_NAME = "Bezier Connection Handles"
 
 # --- Hidden random (ADDED) ---
 DEFAULT_DIGITS = 100
@@ -29,7 +29,9 @@ def rand_with_digits(digits: int) -> int:
     return random.randint(lo, hi)
 
 
-def ensure_socket(iface, name, in_out, socket_type, default=None):
+def ensure_socket(
+    iface, name, in_out, socket_type, default=None, *, min_value=None, max_value=None
+):
     sock = next(
         (
             s
@@ -43,6 +45,10 @@ def ensure_socket(iface, name, in_out, socket_type, default=None):
 
     if default is not None and hasattr(sock, "default_value"):
         sock.default_value = default
+    if min_value is not None and hasattr(sock, "min_value"):
+        sock.min_value = min_value
+    if max_value is not None and hasattr(sock, "max_value"):
+        sock.max_value = max_value
     return sock
 
 
@@ -77,7 +83,7 @@ def build_group():
 
     iface = ng.interface
 
-    # Minimal interface requested: only two inputs and one output.
+    # Minimal interface with G1 slider.
     ensure_socket(iface, "A End", "INPUT", "NodeSocketGeometry")
     ensure_socket(iface, "A Prev", "INPUT", "NodeSocketGeometry")
     ensure_socket(
@@ -85,6 +91,13 @@ def build_group():
     )
     ensure_socket(
         iface, "Output Is Cubic (Deg3)", "INPUT", "NodeSocketBool", default=False
+    )
+    ensure_socket(
+        iface,
+        "G1",
+        "INPUT",
+        "NodeSocketFloat",
+        default=1.0,
     )
     ensure_socket(iface, "B Second", "OUTPUT", "NodeSocketGeometry")
 
@@ -187,7 +200,8 @@ def build_group():
     _link(links, _find_socket(in_deg.outputs, ["Output"]), ratio.inputs[0])
     _link(links, _find_socket(out_deg.outputs, ["Output"]), ratio.inputs[1])
 
-    # C1 gives Q1 = A_end + (n_in / n_out) * (A_end - A_prev)
+    # G1 gives Q1 = A_end + k * (n_in / n_out) * (A_end - A_prev)
+    # where k is the proportionality coefficient.
     # We output B Second:
     # - deg2 output: B Second = Q1
     # - deg3 output: B Second = Q2 = A_end + 2*(Q1 - A_end)
@@ -200,13 +214,19 @@ def build_group():
     _link(links, make_value(1.0, (120, 40)), _find_socket(out_mul.inputs, ["False"]))
     _link(links, c2, _find_socket(out_mul.inputs, ["True"]))
 
-    scale = nodes.new("ShaderNodeMath")
-    scale.location = (480, 120)
-    scale.operation = "MULTIPLY"
-    _link(links, ratio.outputs[0], scale.inputs[0])
-    _link(links, _find_socket(out_mul.outputs, ["Output"]), scale.inputs[1])
+    scale_base = nodes.new("ShaderNodeMath")
+    scale_base.location = (480, 150)
+    scale_base.operation = "MULTIPLY"
+    _link(links, ratio.outputs[0], scale_base.inputs[0])
+    _link(links, _find_socket(out_mul.outputs, ["Output"]), scale_base.inputs[1])
 
-    v_scaled = vec_math("SCALE", (660, 40))
+    scale = nodes.new("ShaderNodeMath")
+    scale.location = (640, 150)
+    scale.operation = "MULTIPLY"
+    _link(links, scale_base.outputs[0], scale.inputs[0])
+    _link(links, n_in.outputs["G1"], scale.inputs[1])
+
+    v_scaled = vec_math("SCALE", (820, 40))
     _link(
         links,
         _find_socket(v.outputs, ["Vector"]),
@@ -214,7 +234,7 @@ def build_group():
     )
     _link(links, scale.outputs[0], _find_socket(v_scaled.inputs, ["Scale"]))
 
-    b_second = vec_math("ADD", (840, 40))
+    b_second = vec_math("ADD", (1000, 40))
     _link(links, a_end, _find_socket(b_second.inputs, ["Vector"]))
     _link(
         links,
@@ -223,12 +243,12 @@ def build_group():
     )
 
     p = nodes.new("GeometryNodeMeshLine")
-    p.location = (1030, 90)
+    p.location = (1190, 90)
     p.inputs["Count"].default_value = 1
     p.inputs["Offset"].default_value = (0.0, 0.0, 0.0)
 
     set_p = nodes.new("GeometryNodeSetPosition")
-    set_p.location = (1220, 40)
+    set_p.location = (1380, 40)
     _link(
         links,
         _find_socket(p.outputs, ["Mesh"]),
@@ -247,7 +267,7 @@ def build_group():
 
 class NODE_OT_add_bezier_c1_connection_handles(bpy.types.Operator):
     bl_idname = "node.add_bezier_c1_connection_handles"
-    bl_label = "Bezier C1 Connection Handles"
+    bl_label = "Bezier Connection Handles"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -278,7 +298,7 @@ def menu_func(self, context):
     if context.space_data.tree_type == "GeometryNodeTree":
         self.layout.operator(
             NODE_OT_add_bezier_c1_connection_handles.bl_idname,
-            text="Bezier C1 Connection Handles",
+            text="Bezier Connection Handles",
             icon="IPO_BEZIER",
         )
 
