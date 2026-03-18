@@ -247,6 +247,139 @@ def ensure_socket(iface, name, in_out, socket_type, default=None):
     return sock
 
 
+
+
+def _find_curve_source_node(tree, calc_node):
+    if "Curve Geometry" not in calc_node.inputs:
+        return None
+    for link in tree.links:
+        if link.to_socket == calc_node.inputs["Curve Geometry"]:
+            return link.from_node
+    return None
+
+
+def _find_matrix_node(tree, calc_node):
+    if "Matrix" not in calc_node.inputs:
+        return None
+    for link in tree.links:
+        if link.to_socket == calc_node.inputs["Matrix"]:
+            source_node = link.from_node
+            if (
+                source_node.bl_idname == "GeometryNodeGroup"
+                and source_node.node_tree
+                and source_node.node_tree.name.startswith("Parametric Transformation Matrix")
+            ):
+                return source_node
+    return None
+
+
+def _is_parametric_curve_node(node):
+    return bool(
+        node
+        and node.bl_idname == "GeometryNodeGroup"
+        and node.node_tree
+        and node.node_tree.name.startswith("Parametric Curve")
+    )
+
+
+def _is_bezier_curve_node(node):
+    return bool(
+        node
+        and node.bl_idname == "GeometryNodeGroup"
+        and node.node_tree
+        and node.node_tree.name.startswith("Bezier Curve")
+    )
+
+
+def _find_socket_by_names(sockets, names):
+    for name in names:
+        sock = sockets.get(name)
+        if sock is not None:
+            return sock
+    for sock in sockets:
+        if sock.name in names:
+            return sock
+    return sockets[0] if len(sockets) else None
+
+
+def _find_input_source_node(tree, node, input_name):
+    if input_name not in node.inputs:
+        return None
+    target = node.inputs[input_name]
+    for link in tree.links:
+        if link.to_node == node and link.to_socket == target:
+            return link.from_node
+    return None
+
+
+def _vector_from_source_node(node, socket_name_hint="Position"):
+    if node is None:
+        raise RuntimeError("Missing Bezier input connection")
+
+    if hasattr(node, "inputs"):
+        sock = node.inputs.get(socket_name_hint)
+        if sock is not None and hasattr(sock, "default_value"):
+            dv = sock.default_value
+            try:
+                return Vector((float(dv[0]), float(dv[1]), float(dv[2])))
+            except Exception:
+                pass
+
+        # Fallback: any 3D vector input with a default value.
+        for sock in node.inputs:
+            if hasattr(sock, "default_value"):
+                dv = sock.default_value
+                try:
+                    if len(dv) >= 3:
+                        return Vector((float(dv[0]), float(dv[1]), float(dv[2])))
+                except Exception:
+                    pass
+
+    raise RuntimeError(
+        f"Unsupported Bezier control input source: {getattr(node, 'bl_idname', type(node).__name__)}. "
+        "Use primitive Points nodes, or nodes exposing a Position vector input."
+    )
+
+
+def _extract_bezier_controls(tree, bezier_node):
+    p0 = _vector_from_source_node(_find_input_source_node(tree, bezier_node, "P0"))
+    p1 = _vector_from_source_node(_find_input_source_node(tree, bezier_node, "P1"))
+    p2_node = _find_input_source_node(tree, bezier_node, "P2")
+    p3_node = _find_input_source_node(tree, bezier_node, "P3")
+
+    p2 = _vector_from_source_node(p2_node) if p2_node else p1.copy()
+    p3 = _vector_from_source_node(p3_node) if p3_node else p2.copy()
+
+    use_p2 = bool(bezier_node.inputs["Use P2 (Quadratic)"].default_value) if "Use P2 (Quadratic)" in bezier_node.inputs else False
+    use_p3 = bool(bezier_node.inputs["Use P3 (Cubic)"].default_value) if "Use P3 (Cubic)" in bezier_node.inputs else False
+
+    if use_p3:
+        end_pt = p3
+        h1 = p1
+        h2 = p2
+    elif use_p2:
+        end_pt = p2
+        h1 = p0 + (2.0 / 3.0) * (p1 - p0)
+        h2 = end_pt + (2.0 / 3.0) * (p1 - end_pt)
+    else:
+        end_pt = p1
+        d = end_pt - p0
+        h1 = p0 + (1.0 / 3.0) * d
+        h2 = p0 + (2.0 / 3.0) * d
+
+    return p0, h1, h2, end_pt
+
+
+def _eval_cubic_bezier(p0, h1, h2, p3, u):
+    omt = 1.0 - u
+    return (
+        (omt ** 3) * p0
+        + 3.0 * (omt ** 2) * u * h1
+        + 3.0 * omt * (u ** 2) * h2
+        + (u ** 3) * p3
+    )
+
+
 def build_group():
     if GROUP_NAME in bpy.data.node_groups:
         ng = bpy.data.node_groups[GROUP_NAME]
@@ -324,67 +457,51 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
             self.report({"ERROR"}, "Select the 'Calculate Surface' node")
             return {"CANCELLED"}
 
-        # Find connected Curve node
-        curve_node = None
-        if "Curve Geometry" in node.inputs:
-            for link in tree.links:
-                if link.to_socket == node.inputs["Curve Geometry"]:
-                    source_node = link.from_node
-                    if (
-                        source_node.bl_idname == "GeometryNodeGroup"
-                        and source_node.node_tree
-                    ):
-                        if source_node.node_tree.name.startswith("Parametric Curve"):
-                            curve_node = source_node
-                            break
-
+        curve_node = _find_curve_source_node(tree, node)
         if not curve_node:
-            self.report({"ERROR"}, "Connect a Parametric Curve to Curve Geometry input")
+            self.report({"ERROR"}, "Connect a Parametric Curve or Bezier Curve to Curve Geometry input")
             return {"CANCELLED"}
 
-        # Find connected Matrix node
-        matrix_node = None
-        if "Matrix" in node.inputs:
-            for link in tree.links:
-                if link.to_socket == node.inputs["Matrix"]:
-                    source_node = link.from_node
-                    if (
-                        source_node.bl_idname == "GeometryNodeGroup"
-                        and source_node.node_tree
-                    ):
-                        if source_node.node_tree.name.startswith("Parametric Transformation Matrix"):
-                            matrix_node = source_node
-                            break
+        curve_mode = None
+        if _is_parametric_curve_node(curve_node):
+            curve_mode = "parametric"
+        elif _is_bezier_curve_node(curve_node):
+            curve_mode = "bezier"
+        else:
+            self.report({"ERROR"}, "Connect a Parametric Curve or Bezier Curve to Curve Geometry input")
+            return {"CANCELLED"}
 
+        matrix_node = _find_matrix_node(tree, node)
         if not matrix_node:
             self.report(
                 {"ERROR"}, "Connect a Parametric Transformation Matrix to Matrix input"
             )
             return {"CANCELLED"}
 
-        # Extract expressions
-        x_expr = curve_node.get("x_expr", "cos(t)")
-        y_expr = curve_node.get("y_expr", "sin(t)")
-        z_expr = curve_node.get("z_expr", "t/(2*pi)")
-
-        # Get t range from curve node inputs
-        t_min = (
-            curve_node.inputs["t Min"].default_value
-            if "t Min" in curve_node.inputs
-            else 0.0
-        )
-        t_max = (
-            curve_node.inputs["t Max"].default_value
-            if "t Max" in curve_node.inputs
-            else 1.0
-        )
+        if curve_mode == "parametric":
+            x_expr = curve_node.get("x_expr", "cos(t)")
+            y_expr = curve_node.get("y_expr", "sin(t)")
+            z_expr = curve_node.get("z_expr", "t/(2*pi)")
+            t_min = (
+                curve_node.inputs["t Min"].default_value
+                if "t Min" in curve_node.inputs
+                else 0.0
+            )
+            t_max = (
+                curve_node.inputs["t Max"].default_value
+                if "t Max" in curve_node.inputs
+                else 1.0
+            )
+        else:
+            x_expr = y_expr = z_expr = None
+            t_min = 0.0
+            t_max = 1.0
 
         m_exprs = {}
         for i in range(16):
             key = f"m{i // 4}{i % 4}"
             m_exprs[key] = matrix_node.get(key, "1" if i % 5 == 0 else "0")
 
-        # Get parameters from node inputs
         s_min = node.inputs["s Min"].default_value if "s Min" in node.inputs else 0.0
         s_max = node.inputs["s Max"].default_value if "s Max" in node.inputs else 1.0
         resolution = (
@@ -392,112 +509,79 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
             if "Resolution" in node.inputs
             else 32
         )
-        sweep_count = 50  # Fixed for now
+        resolution = max(2, resolution)
+        sweep_count = 50
 
         try:
-            # Parse expressions
-            x_rpn = to_rpn(x_expr)
-            y_rpn = to_rpn(y_expr)
-            z_rpn = to_rpn(z_expr)
+            if curve_mode == "parametric":
+                x_rpn = to_rpn(x_expr)
+                y_rpn = to_rpn(y_expr)
+                z_rpn = to_rpn(z_expr)
+                sampled_curve_points = None
+            else:
+                bez_p0, bez_h1, bez_h2, bez_p3 = _extract_bezier_controls(tree, curve_node)
 
             m_rpn = {}
             for key, expr in m_exprs.items():
                 m_rpn[key] = to_rpn(expr)
 
-            # Create unique name for this node's surface
             obj_name = f"Surface_{node.name}"
-
-            # Remove old object if exists
             if obj_name in bpy.data.objects:
                 old_obj = bpy.data.objects[obj_name]
                 bpy.data.objects.remove(old_obj, do_unlink=True)
 
-            # Create surface mesh
             mesh_data = bpy.data.meshes.new(obj_name + "_mesh")
             mesh_obj = bpy.data.objects.new(obj_name, mesh_data)
-            context.collection.objects.link(mesh_obj)
+            (getattr(context, 'collection', None) or context.scene.collection).objects.link(mesh_obj)
 
-            # Create mesh with bmesh
             bm = bmesh.new()
             vertices = []
 
             for s_idx in range(sweep_count):
-                # Map s_idx to [s_min, s_max]
                 s = s_min + (s_idx / max(1, sweep_count - 1)) * (s_max - s_min)
                 row_verts = []
 
                 for t_idx in range(resolution):
-                    # Map t_idx to [t_min, t_max]
                     t = (
                         t_min + (t_idx / max(1, resolution - 1)) * (t_max - t_min)
                         if resolution > 1
                         else t_min
                     )
 
-                    # Evaluate curve at t
-                    x = eval_rpn(x_rpn, {"t": t})
-                    y = eval_rpn(y_rpn, {"t": t})
-                    z = eval_rpn(z_rpn, {"t": t})
+                    if curve_mode == "parametric":
+                        x = eval_rpn(x_rpn, {"t": t})
+                        y = eval_rpn(y_rpn, {"t": t})
+                        z = eval_rpn(z_rpn, {"t": t})
+                    else:
+                        u = t_idx / max(1, resolution - 1)
+                        pt = _eval_cubic_bezier(bez_p0, bez_h1, bez_h2, bez_p3, u)
+                        x, y, z = pt.x, pt.y, pt.z
 
-                    # Get matrix at s
                     matrix_vals = {}
                     for key, rpn in m_rpn.items():
                         matrix_vals[key] = eval_rpn(rpn, {"s": s})
 
-                    # Build 4x4 matrix - Blender uses row-major indexing
-                    # but Matrix() constructor expects rows, so m[row][col]
                     m = Matrix(
                         [
-                            [
-                                matrix_vals.get("m00", 0),
-                                matrix_vals.get("m01", 0),
-                                matrix_vals.get("m02", 0),
-                                matrix_vals.get("m03", 0),
-                            ],
-                            [
-                                matrix_vals.get("m10", 0),
-                                matrix_vals.get("m11", 0),
-                                matrix_vals.get("m12", 0),
-                                matrix_vals.get("m13", 0),
-                            ],
-                            [
-                                matrix_vals.get("m20", 0),
-                                matrix_vals.get("m21", 0),
-                                matrix_vals.get("m22", 0),
-                                matrix_vals.get("m23", 0),
-                            ],
-                            [
-                                matrix_vals.get("m30", 0),
-                                matrix_vals.get("m31", 0),
-                                matrix_vals.get("m32", 0),
-                                matrix_vals.get("m33", 1),
-                            ],
+                            [matrix_vals.get("m00", 0), matrix_vals.get("m01", 0), matrix_vals.get("m02", 0), matrix_vals.get("m03", 0)],
+                            [matrix_vals.get("m10", 0), matrix_vals.get("m11", 0), matrix_vals.get("m12", 0), matrix_vals.get("m13", 0)],
+                            [matrix_vals.get("m20", 0), matrix_vals.get("m21", 0), matrix_vals.get("m22", 0), matrix_vals.get("m23", 0)],
+                            [matrix_vals.get("m30", 0), matrix_vals.get("m31", 0), matrix_vals.get("m32", 0), matrix_vals.get("m33", 1)],
                         ]
                     )
 
-                    # Transform point
                     p = Vector([x, y, z, 1])
                     p_transformed = m @ p
 
-                    # Create vertex
                     if p_transformed.w != 0:
-                        v = bm.verts.new(
-                            (
-                                p_transformed.x / p_transformed.w,
-                                p_transformed.y / p_transformed.w,
-                                p_transformed.z / p_transformed.w,
-                            )
-                        )
+                        v = bm.verts.new((p_transformed.x / p_transformed.w, p_transformed.y / p_transformed.w, p_transformed.z / p_transformed.w))
                     else:
-                        v = bm.verts.new(
-                            (p_transformed.x, p_transformed.y, p_transformed.z)
-                        )
+                        v = bm.verts.new((p_transformed.x, p_transformed.y, p_transformed.z))
 
                     row_verts.append(v)
 
                 vertices.append(row_verts)
 
-            # Create quad faces
             for s_idx in range(sweep_count - 1):
                 for t_idx in range(resolution - 1):
                     v1 = vertices[s_idx][t_idx]
@@ -506,7 +590,7 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
                     v4 = vertices[s_idx + 1][t_idx]
                     try:
                         bm.faces.new([v1, v2, v3, v4])
-                    except:
+                    except Exception:
                         pass
 
             bm.to_mesh(mesh_data)
@@ -522,7 +606,6 @@ class GEOMETRY_OT_calculate_surface(bpy.types.Operator):
         except Exception as ex:
             self.report({"ERROR"}, f"Error: {str(ex)}")
             import traceback
-
             traceback.print_exc()
             return {"CANCELLED"}
 
